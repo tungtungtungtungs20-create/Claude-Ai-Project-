@@ -10,6 +10,8 @@ const MIME_BY_EXT = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image
 const EXT_BY_MIME = {
   'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp',
   'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov',
+  'audio/mpeg': '.mp3', 'audio/mp3': '.mp3', 'audio/wav': '.wav', 'audio/x-wav': '.wav', 'audio/wave': '.wav',
+  'audio/ogg': '.ogg', 'audio/mp4': '.m4a', 'audio/aac': '.aac',
 };
 
 /**
@@ -20,8 +22,12 @@ export function buildPlan(story, overrides = {}) {
   const ratio = overrides.ratio ?? story.ratio ?? DEFAULTS.image.ratio;
   const videoRatio = overrides.videoRatio ?? matchingVideoRatio(ratio);
   const duration = overrides.duration ?? story.duration ?? DEFAULTS.video.duration;
+  const voice = overrides.voice ?? story.voice ?? DEFAULTS.speech.voice;
   const errors = [];
 
+  if (!DEFAULTS.speech.presetVoices.includes(voice)) {
+    errors.push(`Voice "${voice}" isn't a ${DEFAULTS.speech.model} preset. Use one of: ${DEFAULTS.speech.presetVoices.join(', ')}`);
+  }
   if (!DEFAULTS.image.allowedRatios.includes(ratio)) {
     errors.push(`Image ratio "${ratio}" isn't supported by ${DEFAULTS.image.model}. Use one of: ${DEFAULTS.image.allowedRatios.join(', ')}`);
   }
@@ -59,8 +65,15 @@ export function buildPlan(story, overrides = {}) {
       title: scene.title,
       imagePrompt,
       videoPrompt,
+      narration: scene.narration,
       seed: scene.seed ?? story.seed ?? undefined,
     };
+  });
+
+  // Give the speech model the lines around each scene so the read flows.
+  scenes.forEach((s, i) => {
+    s.previousNarration = scenes.slice(0, i).reverse().find((p) => p.narration)?.narration ?? '';
+    s.nextNarration = scenes.slice(i + 1).find((p) => p.narration)?.narration ?? '';
   });
 
   return {
@@ -68,6 +81,8 @@ export function buildPlan(story, overrides = {}) {
     slug: slugify(story.title),
     imageModel: DEFAULTS.image.model,
     videoModel: DEFAULTS.video.model,
+    speechModel: DEFAULTS.speech.model,
+    voice,
     ratio,
     videoRatio,
     duration,
@@ -85,18 +100,21 @@ export function describePlan(plan) {
   if (plan.references.length) {
     out.push(`References: ${plan.references.map((r) => `@${r.tag} (${r.source})`).join(', ')}`);
   }
-  out.push(`Scenes: ${plan.scenes.length} (${plan.scenes.length} images + ${plan.scenes.length} videos)`);
+  const narrated = plan.scenes.filter((s) => s.narration).length;
+  out.push(`Narration: ${plan.speechModel}, voice ${plan.voice}`);
+  out.push(`Scenes: ${plan.scenes.length} (${plan.scenes.length} images + ${plan.scenes.length} videos + ${narrated} narration clips)`);
   for (const s of plan.scenes) {
     out.push('');
     out.push(`[${s.id}] ${s.title}`);
     out.push(`  image  (${s.imagePrompt.length} chars): ${s.imagePrompt}`);
     out.push(`  motion (${s.videoPrompt.length} chars): ${s.videoPrompt}`);
+    out.push(`  narration: ${s.narration || '(none)'}`);
   }
   return out.join('\n');
 }
 
 /**
- * Generate each scene's image, then animate it into a clip.
+ * Generate each scene's image, animate it into a clip, then record its narration.
  * Scenes already on disk are skipped, so you can re-run after a failure
  * without paying for finished scenes again (use force to regenerate).
  */
@@ -107,6 +125,7 @@ export async function runPlan(plan, {
   fetchFn = globalThis.fetch,
   log = console.log,
   imagesOnly = false,
+  narration = true,
   force = false,
   timeoutMs = DEFAULTS.taskTimeoutMs,
 }) {
@@ -126,6 +145,7 @@ export async function runPlan(plan, {
     const entry = (manifest.scenes[scene.id] ??= { title: scene.title });
     entry.imagePrompt = scene.imagePrompt;
     entry.videoPrompt = scene.videoPrompt;
+    entry.narrationText = scene.narration || undefined;
     let stage = 'image';
 
     try {
@@ -159,24 +179,48 @@ export async function runPlan(plan, {
       const existingVideo = !force && (await findFile(outDir, `${scene.id}-video`));
       if (existingVideo) {
         log(`${scene.id}: video already exists (${path.basename(existingVideo)}), skipping`);
+      } else {
+        stage = 'video';
+        log(`${scene.id}: animating clip...`);
+        const task = await client.imageToVideo
+          .create({
+            model: plan.videoModel,
+            promptImage: imageUri,
+            promptText: scene.videoPrompt,
+            ratio: plan.videoRatio,
+            duration: plan.duration,
+            ...(scene.seed !== undefined ? { seed: scene.seed } : {}),
+          })
+          .waitForTaskOutput({ timeout: timeoutMs });
+        const file = await download(fetchFn, task.output[0], path.join(outDir, `${scene.id}-video`));
+        Object.assign(entry, { videoTaskId: task.id, video: path.basename(file), videoError: undefined });
+        await save();
+        log(`${scene.id}: saved ${path.basename(file)}`);
+      }
+
+      // 3. Narration for the scene
+      if (!narration || !scene.narration) continue;
+      const existingAudio = !force && (await findFile(outDir, `${scene.id}-narration`));
+      if (existingAudio) {
+        log(`${scene.id}: narration already exists (${path.basename(existingAudio)}), skipping`);
         continue;
       }
-      stage = 'video';
-      log(`${scene.id}: animating clip...`);
-      const task = await client.imageToVideo
+      stage = 'narration';
+      log(`${scene.id}: recording narration...`);
+      const speech = await client.textToSpeech
         .create({
-          model: plan.videoModel,
-          promptImage: imageUri,
-          promptText: scene.videoPrompt,
-          ratio: plan.videoRatio,
-          duration: plan.duration,
+          model: plan.speechModel,
+          promptText: scene.narration,
+          voice: { type: 'runway-preset', presetId: plan.voice },
+          ...(scene.previousNarration ? { previousText: scene.previousNarration } : {}),
+          ...(scene.nextNarration ? { nextText: scene.nextNarration } : {}),
           ...(scene.seed !== undefined ? { seed: scene.seed } : {}),
         })
         .waitForTaskOutput({ timeout: timeoutMs });
-      const file = await download(fetchFn, task.output[0], path.join(outDir, `${scene.id}-video`));
-      Object.assign(entry, { videoTaskId: task.id, video: path.basename(file), videoError: undefined });
+      const audioFile = await download(fetchFn, speech.output[0], path.join(outDir, `${scene.id}-narration`));
+      Object.assign(entry, { narrationTaskId: speech.id, narration: path.basename(audioFile), narrationError: undefined });
       await save();
-      log(`${scene.id}: saved ${path.basename(file)}`);
+      log(`${scene.id}: saved ${path.basename(audioFile)}`);
     } catch (err) {
       if (err instanceof TaskFailedError || err instanceof TaskTimedOutError) {
         // Record the task so it can be checked in the Developer Portal;
@@ -207,6 +251,8 @@ async function loadManifest(manifestPath, plan) {
       title: plan.title,
       imageModel: plan.imageModel,
       videoModel: plan.videoModel,
+      speechModel: plan.speechModel,
+      voice: plan.voice,
       ratio: plan.ratio,
       videoRatio: plan.videoRatio,
       duration: plan.duration,
@@ -215,7 +261,7 @@ async function loadManifest(manifestPath, plan) {
   }
 }
 
-async function findFile(dir, base) {
+export async function findFile(dir, base) {
   const names = await readdir(dir).catch(() => []);
   const hit = names.find((n) => path.parse(n).name === base);
   return hit ? path.join(dir, hit) : null;
@@ -226,7 +272,8 @@ async function download(fetchFn, url, basePath) {
   const res = await fetchFn(url);
   if (!res.ok) throw new Error(`Download failed (${res.status}) for ${basePath}`);
   const type = (res.headers.get('content-type') || '').split(';')[0].trim();
-  const ext = EXT_BY_MIME[type] || path.extname(new URL(url).pathname) || (basePath.endsWith('-video') ? '.mp4' : '.png');
+  const fallback = basePath.endsWith('-video') ? '.mp4' : basePath.endsWith('-narration') ? '.mp3' : '.png';
+  const ext = EXT_BY_MIME[type] || path.extname(new URL(url).pathname) || fallback;
   const file = basePath + ext;
   await writeFile(file, Buffer.from(await res.arrayBuffer()));
   return file;

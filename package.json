@@ -10,7 +10,8 @@
   "scripts": {
     "plan": "node bin/story-to-scenes.js --dry-run",
     "generate": "node bin/story-to-scenes.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "stitch": "node bin/story-to-scenes.js --stitch-only"
   },
   "engines": {
     "node": ">=20"

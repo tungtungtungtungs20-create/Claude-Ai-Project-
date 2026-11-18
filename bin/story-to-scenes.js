@@ -5,23 +5,30 @@ import { parseArgs } from 'node:util';
 import RunwayML from '@runwayml/sdk';
 import { parseStory } from '../src/story.js';
 import { buildPlan, describePlan, runPlan } from '../src/pipeline.js';
+import { stitchFilm } from '../src/stitch.js';
 
-const HELP = `Turn a story into scene images and video clips with Runway.
+const HELP = `Turn a story into scene images, video clips and narration with Runway,
+then stitch them into one film.
 
 Usage:
   node bin/story-to-scenes.js <story.md> [options]
 
 Options:
   --dry-run        Show the scenes and prompts; don't call Runway (free)
-  --images-only    Generate the still images, skip the video clips
+  --images-only    Generate the still images, skip clips, narration and stitching
+  --skip-narration Don't generate narration (the film is silent where none exists)
+  --skip-stitch    Generate scenes but don't build the final film
+  --stitch-only    Only build the final film from files already generated (free)
   --force          Regenerate scenes that already have files
   --out <dir>      Output folder (default: output/<story-title>)
   --ratio <w:h>    Image ratio, e.g. 1280:720 or 720:1280 (default 1280:720)
   --duration <s>   Clip length in seconds (default 5)
+  --voice <name>   Narrator preset voice (default Bernard)
   -h, --help       Show this help
 
 Needs RUNWAYML_API_SECRET set to a Runway Dev project API key.
-Every image and clip uses project credits.`;
+Every image, clip and narration uses project credits.
+Stitching needs ffmpeg installed.`;
 
 async function main() {
   const { values, positionals } = parseArgs({
@@ -29,6 +36,10 @@ async function main() {
     options: {
       'dry-run': { type: 'boolean' },
       'images-only': { type: 'boolean' },
+      'skip-narration': { type: 'boolean' },
+      'skip-stitch': { type: 'boolean' },
+      'stitch-only': { type: 'boolean' },
+      voice: { type: 'string' },
       force: { type: 'boolean' },
       out: { type: 'string' },
       ratio: { type: 'string' },
@@ -46,6 +57,7 @@ async function main() {
   const story = parseStory(await readFile(storyPath, 'utf8'));
   const plan = buildPlan(story, {
     ratio: values.ratio,
+    voice: values.voice,
     duration: values.duration !== undefined ? Number(values.duration) : undefined,
   });
 
@@ -63,12 +75,24 @@ async function main() {
     console.error(`Problems to fix before generating:\n- ${plan.errors.join('\n- ')}`);
     process.exit(1);
   }
+
+  const outDir = path.resolve(values.out ?? path.join('output', plan.slug));
+  const stitch = async () => {
+    console.log(`\nStitching film...`);
+    const film = await stitchFilm(plan, { outDir });
+    console.log(`Film: ${film.output} (${film.duration.toFixed(1)}s, ${film.scenes} scenes)`);
+  };
+
+  if (values['stitch-only']) {
+    await stitch();
+    return;
+  }
+
   if (!process.env.RUNWAYML_API_SECRET) {
     console.error('RUNWAYML_API_SECRET is not set. Create a project API key in the Runway Dev Developer Portal and set it in your environment (never commit it).');
     process.exit(1);
   }
 
-  const outDir = path.resolve(values.out ?? path.join('output', plan.slug));
   console.log(`Generating ${plan.scenes.length} scene(s) into ${outDir}`);
 
   const client = new RunwayML(); // reads RUNWAYML_API_SECRET
@@ -77,14 +101,16 @@ async function main() {
     outDir,
     storyDir: path.dirname(storyPath),
     imagesOnly: values['images-only'],
+    narration: !values['skip-narration'],
     force: values.force,
   });
 
-  console.log(`\nDone. Details in ${manifestPath}`);
+  console.log(`\nScenes done. Details in ${manifestPath}`);
   if (failures) {
-    console.error(`${failures} scene(s) failed; see the manifest for task IDs. Re-run to retry only the missing scenes.`);
+    console.error(`${failures} scene(s) failed; see the manifest for task IDs. Re-run to retry only the missing scenes, then the film is stitched.`);
     process.exit(2);
   }
+  if (!values['images-only'] && !values['skip-stitch']) await stitch();
 }
 
 main().catch((err) => {
