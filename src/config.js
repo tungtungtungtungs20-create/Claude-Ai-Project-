@@ -36,6 +36,17 @@ export const DEFAULTS = {
       'Niki', 'Vincent', 'Kendrick', 'Myrna', 'Tom', 'Wanda', 'Benjamin', 'Kiana', 'Rachel',
     ],
   },
+  music: {
+    // eleven_music_v2_5 makes an instrumental track sized to the finished film.
+    // You're billed for the requested length.
+    model: 'eleven_music_v2_5',
+    // Music level under the narration (0 to 1), before ducking.
+    volume: 0.3,
+    fadeInSeconds: 2,
+    fadeOutSeconds: 3,
+    // Extra seconds requested beyond the film's length, as a safety margin.
+    paddingSeconds: 2,
+  },
   // Final film: silence kept after each scene's narration before the cut (seconds).
   narrationTailSeconds: 0.6,
   fps: 24,
