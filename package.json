@@ -1,0 +1,26 @@
+{
+  "name": "story-to-scenes",
+  "version": "1.0.0",
+  "description": "Turn a written story into scene images and video clips with the Runway Dev API.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "story-to-scenes": "bin/story-to-scenes.js"
+  },
+  "scripts": {
+    "plan": "node bin/story-to-scenes.js --dry-run",
+    "generate": "node bin/story-to-scenes.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tungtungtungtungs20-create/Claude-Ai-Project-.git"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "@runwayml/sdk": "4.28.0"
+  }
+}
