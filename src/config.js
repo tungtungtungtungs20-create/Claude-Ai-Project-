@@ -24,6 +24,21 @@ export const DEFAULTS = {
     // The SDK types don't list allowed durations; check the API reference.
     duration: 5,
   },
+  speech: {
+    // eleven_v4 reads each scene's narration with a preset voice.
+    model: 'eleven_v4',
+    voice: 'Bernard',
+    presetVoices: [
+      'Maya', 'Arjun', 'Serene', 'Bernard', 'Billy', 'Mark', 'Clint', 'Mabel', 'Chad', 'Leslie',
+      'Eleanor', 'Elias', 'Elliot', 'Grungle', 'Brodie', 'Sandra', 'Kirk', 'Kylie', 'Lara', 'Lisa',
+      'Malachi', 'Marlene', 'Martin', 'Miriam', 'Monster', 'Paula', 'Pip', 'Rusty', 'Ragnar', 'Xylar',
+      'Maggie', 'Jack', 'Katie', 'Noah', 'James', 'Rina', 'Ella', 'Mariah', 'Frank', 'Claudia',
+      'Niki', 'Vincent', 'Kendrick', 'Myrna', 'Tom', 'Wanda', 'Benjamin', 'Kiana', 'Rachel',
+    ],
+  },
+  // Final film: silence kept after each scene's narration before the cut (seconds).
+  narrationTailSeconds: 0.6,
+  fps: 24,
   // Both promptText fields allow at most 1000 UTF-16 code units.
   maxPromptLength: 1000,
   // Data URI inputs are limited to 5MB.

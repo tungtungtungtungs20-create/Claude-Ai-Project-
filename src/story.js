@@ -4,23 +4,25 @@
 //   Style: painterly, warm golden light, cinematic
 //   Ratio: 1280:720
 //   Reference: noah = refs/noah.png
+//   Voice: Bernard
 //
 //   ## The Storm Gathers
 //   Free text describing the scene (used for the image if there's no Image: line).
 //   Image: what the still frame should show
 //   Motion: how the camera and subjects move in the clip
+//   Narration: what the narrator says over this scene
 //
 // Each "## " heading starts a new scene.
 
-const SETTING_RE = /^(style|ratio|reference|duration|seed)\s*:\s*(.*)$/i;
-const SCENE_FIELD_RE = /^(image|motion|seed)\s*:\s*(.*)$/i;
+const SETTING_RE = /^(style|ratio|reference|duration|seed|voice)\s*:\s*(.*)$/i;
+const SCENE_FIELD_RE = /^(image|motion|seed|narration)\s*:\s*(.*)$/i;
 
 export function parseStory(markdown) {
   const lines = markdown
     .replace(/\r\n?/g, '\n')
     .replace(/<!--[\s\S]*?-->/g, '')
     .split('\n');
-  const story = { title: '', style: '', ratio: null, duration: null, seed: null, references: [], scenes: [] };
+  const story = { title: '', style: '', ratio: null, duration: null, seed: null, voice: null, references: [], scenes: [] };
   let scene = null;
 
   const flush = () => {
@@ -36,7 +38,7 @@ export function parseStory(markdown) {
 
     if (line.startsWith('## ')) {
       flush();
-      scene = { title: line.slice(3).trim(), image: '', motion: '', seed: null, textLines: [] };
+      scene = { title: line.slice(3).trim(), image: '', motion: '', narration: '', seed: null, textLines: [] };
       continue;
     }
     if (line.startsWith('# ') && !scene) {
@@ -53,6 +55,7 @@ export function parseStory(markdown) {
         case 'ratio': story.ratio = value.trim(); break;
         case 'duration': story.duration = Number(value); break;
         case 'seed': story.seed = Number(value); break;
+        case 'voice': story.voice = value.trim(); break;
         case 'reference': story.references.push(parseReference(value)); break;
       }
       continue;
@@ -63,6 +66,8 @@ export function parseStory(markdown) {
       const [, key, value] = m;
       const k = key.toLowerCase();
       if (k === 'seed') scene.seed = Number(value);
+      // Several Narration: lines in one scene are read as one passage.
+      else if (k === 'narration') scene.narration = [scene.narration, value.trim()].filter(Boolean).join(' ');
       else scene[k] = value.trim();
     } else {
       scene.textLines.push(line);

@@ -13,17 +13,25 @@ const STORY = `# Test Tale
 Style: watercolor
 Reference: hero_1 = https://example.com/hero.png
 
+Voice: Maya
+
 ## Opening
 A fox on a hill.
 Motion: slow pan
+Narration: Once there was a fox.
+Narration: It lived on a hill.
+
+## Middle
+The fox runs.
 
 ## Ending
 Description that is ignored when an Image line exists.
 Image: The fox asleep under stars.
+Narration: And then it slept.
 `;
 
 function fakeClient({ failVideoFor } = {}) {
-  const calls = { image: [], video: [] };
+  const calls = { image: [], video: [], speech: [] };
   let n = 0;
   const task = (kind, body) => ({
     waitForTaskOutput: async () => {
@@ -31,19 +39,21 @@ function fakeClient({ failVideoFor } = {}) {
       if (kind === 'video' && failVideoFor && body.promptText === failVideoFor) {
         throw new TaskFailedError({ id, status: 'FAILED', failure: 'moderation', failureCode: 'SAFETY.INPUT.TEXT', createdAt: '' });
       }
-      return { id, status: 'SUCCEEDED', output: [`https://cdn.example.com/${id}.${kind === 'image' ? 'png' : 'mp4'}`] };
+      const ext = { image: 'png', video: 'mp4', speech: 'mp3' }[kind];
+      return { id, status: 'SUCCEEDED', output: [`https://cdn.example.com/${id}.${ext}`] };
     },
   });
   return {
     calls,
     textToImage: { create: (body) => (calls.image.push(body), task('image', body)) },
     imageToVideo: { create: (body) => (calls.video.push(body), task('video', body)) },
+    textToSpeech: { create: (body) => (calls.speech.push(body), task('speech', body)) },
   };
 }
 
 const fakeFetch = async (url) => ({
   ok: true,
-  headers: new Headers({ 'content-type': url.endsWith('.png') ? 'image/png' : 'video/mp4' }),
+  headers: new Headers({ 'content-type': url.endsWith('.png') ? 'image/png' : url.endsWith('.mp3') ? 'audio/mpeg' : 'video/mp4' }),
   arrayBuffer: async () => new TextEncoder().encode(url).buffer,
 });
 
@@ -52,10 +62,13 @@ test('parses title, settings, references and scenes', () => {
   assert.equal(story.title, 'Test Tale');
   assert.equal(story.style, 'watercolor');
   assert.deepEqual(story.references, [{ tag: 'hero_1', source: 'https://example.com/hero.png' }]);
-  assert.equal(story.scenes.length, 2);
+  assert.equal(story.scenes.length, 3);
+  assert.equal(story.voice, 'Maya');
+  assert.equal(story.scenes[0].narration, 'Once there was a fox. It lived on a hill.');
+  assert.equal(story.scenes[1].narration, '');
   assert.equal(story.scenes[0].text, 'A fox on a hill.');
   assert.equal(story.scenes[0].motion, 'slow pan');
-  assert.equal(story.scenes[1].image, 'The fox asleep under stars.');
+  assert.equal(story.scenes[2].image, 'The fox asleep under stars.');
 });
 
 test('ignores HTML comments, including multi-line ones', () => {
@@ -72,7 +85,12 @@ test('builds prompts with the story style and validates limits', () => {
   const plan = buildPlan(parseStory(STORY));
   assert.deepEqual(plan.errors, []);
   assert.equal(plan.scenes[0].imagePrompt, 'A fox on a hill. watercolor');
-  assert.equal(plan.scenes[1].imagePrompt, 'The fox asleep under stars. watercolor');
+  assert.equal(plan.scenes[2].imagePrompt, 'The fox asleep under stars. watercolor');
+  assert.equal(plan.voice, 'Maya');
+  // Neighbouring narration skips scenes that have none.
+  assert.equal(plan.scenes[2].previousNarration, 'Once there was a fox. It lived on a hill.');
+  assert.equal(plan.scenes[0].nextNarration, 'And then it slept.');
+  assert.match(buildPlan(parseStory('# T\nVoice: Nobody\n## S\nx')).errors.join(), /isn't a eleven_v4 preset/);
   assert.equal(plan.videoRatio, '1280:720');
 
   const long = buildPlan(parseStory(`# T\n## S\n${'x'.repeat(1001)}`));
@@ -88,15 +106,24 @@ test('picks a video ratio matching the image orientation', () => {
   assert.equal(matchingVideoRatio('2112:912'), '1584:672');
 });
 
-test('generates image then video for each scene, and skips finished scenes on re-run', async () => {
+test('generates image, video and narration for each scene, and skips finished scenes on re-run', async () => {
   const outDir = await mkdtemp(path.join(tmpdir(), 'sts-'));
   const plan = buildPlan(parseStory(STORY));
   const client = fakeClient();
 
   const res = await runPlan(plan, { client, outDir, fetchFn: fakeFetch, log: () => {} });
   assert.equal(res.failures, 0);
-  assert.equal(client.calls.image.length, 2);
-  assert.equal(client.calls.video.length, 2);
+  assert.equal(client.calls.image.length, 3);
+  assert.equal(client.calls.video.length, 3);
+  assert.equal(client.calls.speech.length, 2); // the middle scene has no narration
+
+  const sp = client.calls.speech[0];
+  assert.equal(sp.model, 'eleven_v4');
+  assert.equal(sp.promptText, 'Once there was a fox. It lived on a hill.');
+  assert.deepEqual(sp.voice, { type: 'runway-preset', presetId: 'Maya' });
+  assert.equal(sp.previousText, undefined);
+  assert.equal(sp.nextText, 'And then it slept.');
+  assert.equal(client.calls.speech[1].previousText, 'Once there was a fox. It lived on a hill.');
 
   const img = client.calls.image[0];
   assert.equal(img.model, 'gen4_image');
@@ -110,13 +137,18 @@ test('generates image then video for each scene, and skips finished scenes on re
   assert.equal(vid.duration, 5);
 
   const files = (await readdir(outDir)).sort();
-  assert.deepEqual(files, ['manifest.json', 'scene-01-image.png', 'scene-01-video.mp4', 'scene-02-image.png', 'scene-02-video.mp4']);
+  assert.deepEqual(files, [
+    'manifest.json',
+    'scene-01-image.png', 'scene-01-narration.mp3', 'scene-01-video.mp4',
+    'scene-02-image.png', 'scene-02-video.mp4',
+    'scene-03-image.png', 'scene-03-narration.mp3', 'scene-03-video.mp4',
+  ]);
   const manifest = JSON.parse(await readFile(path.join(outDir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.scenes['scene-01'].imageTaskId, 'image-task-1');
 
   const again = fakeClient();
   await runPlan(plan, { client: again, outDir, fetchFn: fakeFetch, log: () => {} });
-  assert.equal(again.calls.image.length + again.calls.video.length, 0);
+  assert.equal(again.calls.image.length + again.calls.video.length + again.calls.speech.length, 0);
 });
 
 test('resumes a missing video from the saved image as a data URI', async () => {
@@ -135,11 +167,20 @@ test('records a failed task and continues with the next scene', async () => {
   const client = fakeClient({ failVideoFor: 'slow pan' });
   const res = await runPlan(plan, { client, outDir, fetchFn: fakeFetch, log: () => {} });
   assert.equal(res.failures, 1);
-  assert.equal(client.calls.video.length, 2);
+  assert.equal(client.calls.video.length, 3);
+  assert.equal(client.calls.speech.length, 1); // scene 1 stopped at its failed video
   const manifest = JSON.parse(await readFile(path.join(outDir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.scenes['scene-01'].videoError.failureCode, 'SAFETY.INPUT.TEXT');
   assert.equal(manifest.scenes['scene-01'].image, 'scene-01-image.png');
-  assert.equal(manifest.scenes['scene-02'].video, 'scene-02-video.mp4');
+  assert.equal(manifest.scenes['scene-03'].video, 'scene-03-video.mp4');
+  assert.equal(manifest.scenes['scene-03'].narration, 'scene-03-narration.mp3');
+});
+
+test('skip narration when asked', async () => {
+  const outDir = await mkdtemp(path.join(tmpdir(), 'sts-'));
+  const client = fakeClient();
+  await runPlan(buildPlan(parseStory(STORY)), { client, outDir, fetchFn: fakeFetch, log: () => {}, narration: false });
+  assert.equal(client.calls.speech.length, 0);
 });
 
 test('slugify', () => {
