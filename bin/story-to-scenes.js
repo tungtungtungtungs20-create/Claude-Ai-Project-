@@ -4,11 +4,11 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import RunwayML from '@runwayml/sdk';
 import { parseStory } from '../src/story.js';
-import { buildPlan, describePlan, runPlan } from '../src/pipeline.js';
-import { stitchFilm } from '../src/stitch.js';
+import { buildPlan, describePlan, generateMusic, runPlan } from '../src/pipeline.js';
+import { measureScenes, stitchFilm } from '../src/stitch.js';
 
-const HELP = `Turn a story into scene images, video clips and narration with Runway,
-then stitch them into one film.
+const HELP = `Turn a story into scene images, video clips, narration and background
+music with Runway, then stitch them into one film.
 
 Usage:
   node bin/story-to-scenes.js <story.md> [options]
@@ -17,6 +17,7 @@ Options:
   --dry-run        Show the scenes and prompts; don't call Runway (free)
   --images-only    Generate the still images, skip clips, narration and stitching
   --skip-narration Don't generate narration (the film is silent where none exists)
+  --skip-music     Don't generate or mix in background music
   --skip-stitch    Generate scenes but don't build the final film
   --stitch-only    Only build the final film from files already generated (free)
   --force          Regenerate scenes that already have files
@@ -24,10 +25,11 @@ Options:
   --ratio <w:h>    Image ratio, e.g. 1280:720 or 720:1280 (default 1280:720)
   --duration <s>   Clip length in seconds (default 5)
   --voice <name>   Narrator preset voice (default Bernard)
+  --music-volume <0-1>  Background music level under the narration (default 0.3)
   -h, --help       Show this help
 
 Needs RUNWAYML_API_SECRET set to a Runway Dev project API key.
-Every image, clip and narration uses project credits.
+Every image, clip, narration and music track uses project credits.
 Stitching needs ffmpeg installed.`;
 
 async function main() {
@@ -38,6 +40,8 @@ async function main() {
       'images-only': { type: 'boolean' },
       'skip-narration': { type: 'boolean' },
       'skip-stitch': { type: 'boolean' },
+      'skip-music': { type: 'boolean' },
+      'music-volume': { type: 'string' },
       'stitch-only': { type: 'boolean' },
       voice: { type: 'string' },
       force: { type: 'boolean' },
@@ -58,6 +62,7 @@ async function main() {
   const plan = buildPlan(story, {
     ratio: values.ratio,
     voice: values.voice,
+    musicVolume: values['music-volume'] !== undefined ? Number(values['music-volume']) : undefined,
     duration: values.duration !== undefined ? Number(values.duration) : undefined,
   });
 
@@ -79,8 +84,8 @@ async function main() {
   const outDir = path.resolve(values.out ?? path.join('output', plan.slug));
   const stitch = async () => {
     console.log(`\nStitching film...`);
-    const film = await stitchFilm(plan, { outDir });
-    console.log(`Film: ${film.output} (${film.duration.toFixed(1)}s, ${film.scenes} scenes)`);
+    const film = await stitchFilm(plan, { outDir, music: !values['skip-music'] });
+    console.log(`Film: ${film.output} (${film.duration.toFixed(1)}s, ${film.scenes} scenes${film.music ? ', with music' : ''})`);
   };
 
   if (values['stitch-only']) {
@@ -110,7 +115,20 @@ async function main() {
     console.error(`${failures} scene(s) failed; see the manifest for task IDs. Re-run to retry only the missing scenes, then the film is stitched.`);
     process.exit(2);
   }
-  if (!values['images-only'] && !values['skip-stitch']) await stitch();
+  if (values['images-only']) return;
+
+  // Music is sized to the finished film, so it's made once every scene is done.
+  let musicFailed = false;
+  if (plan.music && !values['skip-music']) {
+    const { totalSeconds } = await measureScenes(plan, { outDir });
+    ({ failed: musicFailed = false } = await generateMusic(plan, { client, outDir, seconds: totalSeconds, force: values.force }));
+  }
+
+  if (!values['skip-stitch']) await stitch();
+  if (musicFailed) {
+    console.error('The music task failed (see the manifest), so the film has no music. Re-run to try the music again.');
+    process.exit(2);
+  }
 }
 
 main().catch((err) => {

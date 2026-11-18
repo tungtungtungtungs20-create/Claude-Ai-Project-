@@ -23,8 +23,12 @@ export function buildPlan(story, overrides = {}) {
   const videoRatio = overrides.videoRatio ?? matchingVideoRatio(ratio);
   const duration = overrides.duration ?? story.duration ?? DEFAULTS.video.duration;
   const voice = overrides.voice ?? story.voice ?? DEFAULTS.speech.voice;
+  const musicVolume = overrides.musicVolume ?? story.musicVolume ?? DEFAULTS.music.volume;
   const errors = [];
 
+  if (!Number.isFinite(musicVolume) || musicVolume < 0 || musicVolume > 1) {
+    errors.push(`Music volume must be between 0 and 1 (got "${musicVolume}").`);
+  }
   if (!DEFAULTS.speech.presetVoices.includes(voice)) {
     errors.push(`Voice "${voice}" isn't a ${DEFAULTS.speech.model} preset. Use one of: ${DEFAULTS.speech.presetVoices.join(', ')}`);
   }
@@ -83,6 +87,9 @@ export function buildPlan(story, overrides = {}) {
     videoModel: DEFAULTS.video.model,
     speechModel: DEFAULTS.speech.model,
     voice,
+    musicModel: DEFAULTS.music.model,
+    music: story.music,
+    musicVolume,
     ratio,
     videoRatio,
     duration,
@@ -102,6 +109,9 @@ export function describePlan(plan) {
   }
   const narrated = plan.scenes.filter((s) => s.narration).length;
   out.push(`Narration: ${plan.speechModel}, voice ${plan.voice}`);
+  out.push(plan.music
+    ? `Music: ${plan.musicModel}, instrumental, ${Math.round(plan.musicVolume * 100)}% volume: ${plan.music}`
+    : 'Music: none (add a "Music:" line to the story header)');
   out.push(`Scenes: ${plan.scenes.length} (${plan.scenes.length} images + ${plan.scenes.length} videos + ${narrated} narration clips)`);
   for (const s of plan.scenes) {
     out.push('');
@@ -243,6 +253,53 @@ export async function runPlan(plan, {
   return { failures, manifestPath };
 }
 
+/**
+ * Make one instrumental track for the whole film, sized to its length.
+ * Skipped if music already exists (use force to make a new track).
+ */
+export async function generateMusic(plan, {
+  client,
+  outDir,
+  seconds,
+  fetchFn = globalThis.fetch,
+  log = console.log,
+  force = false,
+  timeoutMs = DEFAULTS.taskTimeoutMs,
+}) {
+  if (!plan.music) return { skipped: 'no Music: line in the story' };
+  const existing = !force && (await findFile(outDir, 'music'));
+  if (existing) {
+    log(`music: already exists (${path.basename(existing)}), skipping`);
+    return { file: existing };
+  }
+
+  const manifestPath = path.join(outDir, 'manifest.json');
+  const manifest = await loadManifest(manifestPath, plan);
+  const save = () => writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  const duration = Math.ceil(seconds + DEFAULTS.music.paddingSeconds);
+
+  log(`music: composing ${duration}s track...`);
+  try {
+    const task = await client.textToMusic
+      .create({ model: plan.musicModel, promptText: plan.music, duration, instrumental: true })
+      .waitForTaskOutput({ timeout: timeoutMs });
+    const file = await download(fetchFn, task.output[0], path.join(outDir, 'music'));
+    manifest.music = { taskId: task.id, file: path.basename(file), prompt: plan.music, seconds: duration };
+    await save();
+    log(`music: saved ${path.basename(file)}`);
+    return { file };
+  } catch (err) {
+    if (err instanceof TaskFailedError || err instanceof TaskTimedOutError) {
+      const d = err.taskDetails ?? {};
+      manifest.music = { prompt: plan.music, error: { taskId: d.id, status: d.status, failureCode: d.failureCode, message: err.message } };
+      await save();
+      log(`music: ${err.name} (task ${d.id ?? 'unknown'}${d.failureCode ? `, ${d.failureCode}` : ''}): ${err.message}`);
+      return { failed: true };
+    }
+    throw err;
+  }
+}
+
 async function loadManifest(manifestPath, plan) {
   try {
     return JSON.parse(await readFile(manifestPath, 'utf8'));
@@ -272,7 +329,8 @@ async function download(fetchFn, url, basePath) {
   const res = await fetchFn(url);
   if (!res.ok) throw new Error(`Download failed (${res.status}) for ${basePath}`);
   const type = (res.headers.get('content-type') || '').split(';')[0].trim();
-  const fallback = basePath.endsWith('-video') ? '.mp4' : basePath.endsWith('-narration') ? '.mp3' : '.png';
+  const isAudio = basePath.endsWith('-narration') || path.basename(basePath) === 'music';
+  const fallback = basePath.endsWith('-video') ? '.mp4' : isAudio ? '.mp3' : '.png';
   const ext = EXT_BY_MIME[type] || path.extname(new URL(url).pathname) || fallback;
   const file = basePath + ext;
   await writeFile(file, Buffer.from(await res.arrayBuffer()));

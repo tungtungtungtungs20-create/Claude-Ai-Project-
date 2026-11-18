@@ -5,6 +5,8 @@
 //   Ratio: 1280:720
 //   Reference: noah = refs/noah.png
 //   Voice: Bernard
+//   Music: gentle orchestral strings, hopeful, slow build
+//   Music volume: 0.3
 //
 //   ## The Storm Gathers
 //   Free text describing the scene (used for the image if there's no Image: line).
@@ -14,7 +16,7 @@
 //
 // Each "## " heading starts a new scene.
 
-const SETTING_RE = /^(style|ratio|reference|duration|seed|voice)\s*:\s*(.*)$/i;
+const SETTING_RE = /^(style|ratio|reference|duration|seed|voice|music\s+volume|music)\s*:\s*(.*)$/i;
 const SCENE_FIELD_RE = /^(image|motion|seed|narration)\s*:\s*(.*)$/i;
 
 export function parseStory(markdown) {
@@ -22,7 +24,7 @@ export function parseStory(markdown) {
     .replace(/\r\n?/g, '\n')
     .replace(/<!--[\s\S]*?-->/g, '')
     .split('\n');
-  const story = { title: '', style: '', ratio: null, duration: null, seed: null, voice: null, references: [], scenes: [] };
+  const story = { title: '', style: '', ratio: null, duration: null, seed: null, voice: null, music: '', musicVolume: null, references: [], scenes: [] };
   let scene = null;
 
   const flush = () => {
@@ -50,12 +52,14 @@ export function parseStory(markdown) {
       const m = line.match(SETTING_RE);
       if (!m) continue;
       const [, key, value] = m;
-      switch (key.toLowerCase()) {
+      switch (key.toLowerCase().replace(/\s+/g, ' ')) {
         case 'style': story.style = value.trim(); break;
         case 'ratio': story.ratio = value.trim(); break;
         case 'duration': story.duration = Number(value); break;
         case 'seed': story.seed = Number(value); break;
         case 'voice': story.voice = value.trim(); break;
+        case 'music': story.music = value.trim(); break;
+        case 'music volume': story.musicVolume = Number(value); break;
         case 'reference': story.references.push(parseReference(value)); break;
       }
       continue;

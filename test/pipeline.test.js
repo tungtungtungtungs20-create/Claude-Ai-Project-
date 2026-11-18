@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { TaskFailedError } from '@runwayml/sdk';
 import { parseStory, slugify } from '../src/story.js';
-import { buildPlan, runPlan } from '../src/pipeline.js';
+import { buildPlan, generateMusic, runPlan } from '../src/pipeline.js';
 import { matchingVideoRatio } from '../src/config.js';
 
 const STORY = `# Test Tale
@@ -31,7 +31,7 @@ Narration: And then it slept.
 `;
 
 function fakeClient({ failVideoFor } = {}) {
-  const calls = { image: [], video: [], speech: [] };
+  const calls = { image: [], video: [], speech: [], music: [] };
   let n = 0;
   const task = (kind, body) => ({
     waitForTaskOutput: async () => {
@@ -39,7 +39,10 @@ function fakeClient({ failVideoFor } = {}) {
       if (kind === 'video' && failVideoFor && body.promptText === failVideoFor) {
         throw new TaskFailedError({ id, status: 'FAILED', failure: 'moderation', failureCode: 'SAFETY.INPUT.TEXT', createdAt: '' });
       }
-      const ext = { image: 'png', video: 'mp4', speech: 'mp3' }[kind];
+      if (kind === 'music' && failVideoFor === 'music') {
+        throw new TaskFailedError({ id, status: 'FAILED', failure: 'bad prompt', failureCode: 'INPUT.INVALID', createdAt: '' });
+      }
+      const ext = { image: 'png', video: 'mp4', speech: 'mp3', music: 'mp3' }[kind];
       return { id, status: 'SUCCEEDED', output: [`https://cdn.example.com/${id}.${ext}`] };
     },
   });
@@ -48,6 +51,7 @@ function fakeClient({ failVideoFor } = {}) {
     textToImage: { create: (body) => (calls.image.push(body), task('image', body)) },
     imageToVideo: { create: (body) => (calls.video.push(body), task('video', body)) },
     textToSpeech: { create: (body) => (calls.speech.push(body), task('speech', body)) },
+    textToMusic: { create: (body) => (calls.music.push(body), task('music', body)) },
   };
 }
 
@@ -181,6 +185,46 @@ test('skip narration when asked', async () => {
   const client = fakeClient();
   await runPlan(buildPlan(parseStory(STORY)), { client, outDir, fetchFn: fakeFetch, log: () => {}, narration: false });
   assert.equal(client.calls.speech.length, 0);
+});
+
+test('parses music settings and checks the volume', () => {
+  const story = parseStory('# T\nMusic: soft piano\nMusic volume: 0.2\n## S\nx');
+  assert.equal(story.music, 'soft piano');
+  assert.equal(story.musicVolume, 0.2);
+  const plan = buildPlan(story);
+  assert.equal(plan.music, 'soft piano');
+  assert.equal(plan.musicVolume, 0.2);
+  assert.equal(buildPlan(story, { musicVolume: 0.5 }).musicVolume, 0.5);
+  assert.match(buildPlan(parseStory('# T\nMusic volume: 3\n## S\nx')).errors.join(), /between 0 and 1/);
+  assert.equal(buildPlan(parseStory('# T\n## S\nx')).music, '');
+});
+
+test('makes one instrumental track sized to the film, once', async () => {
+  const outDir = await mkdtemp(path.join(tmpdir(), 'sts-'));
+  const plan = buildPlan(parseStory('# T\nMusic: soft piano\n## S\nx'));
+  const client = fakeClient();
+  const res = await generateMusic(plan, { client, outDir, seconds: 31.2, fetchFn: fakeFetch, log: () => {} });
+  assert.equal(path.basename(res.file), 'music.mp3');
+  assert.deepEqual(client.calls.music, [{ model: 'eleven_music_v2_5', promptText: 'soft piano', duration: 34, instrumental: true }]);
+  const manifest = JSON.parse(await readFile(path.join(outDir, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.music.taskId, 'music-task-1');
+
+  const again = fakeClient();
+  await generateMusic(plan, { client: again, outDir, seconds: 31.2, fetchFn: fakeFetch, log: () => {} });
+  assert.equal(again.calls.music.length, 0);
+});
+
+test('no music without a Music: line, and a failed music task is recorded', async () => {
+  const outDir = await mkdtemp(path.join(tmpdir(), 'sts-'));
+  const client = fakeClient({ failVideoFor: 'music' });
+  const none = await generateMusic(buildPlan(parseStory('# T\n## S\nx')), { client, outDir, seconds: 5, fetchFn: fakeFetch, log: () => {} });
+  assert.ok(none.skipped);
+  assert.equal(client.calls.music.length, 0);
+
+  const res = await generateMusic(buildPlan(parseStory('# T\nMusic: drums\n## S\nx')), { client, outDir, seconds: 5, fetchFn: fakeFetch, log: () => {} });
+  assert.equal(res.failed, true);
+  const manifest = JSON.parse(await readFile(path.join(outDir, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.music.error.failureCode, 'INPUT.INVALID');
 });
 
 test('slugify', () => {
