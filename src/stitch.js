@@ -1,5 +1,5 @@
 // Joins the scene clips into one film, laying each scene's narration over its clip,
-// and mixes in background music if there is any.
+// mixes in background music if there is any, and adds subtitles from the narration.
 // Needs ffmpeg and ffprobe installed (https://ffmpeg.org/download.html).
 //
 // If a scene's narration runs longer than its clip, the clip's last frame is
@@ -10,6 +10,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { DEFAULTS } from './config.js';
 import { findFile } from './pipeline.js';
+import { buildCues, toSrt } from './subtitles.js';
 
 const run = promisify(execFile);
 
@@ -51,6 +52,7 @@ export async function stitchFilm(plan, {
   fps = DEFAULTS.fps,
   music = true,
   musicVolume = plan.musicVolume ?? DEFAULTS.music.volume,
+  subtitles = plan.subtitles ?? 'soft',
 }) {
   await checkTool(ffmpeg);
   const { scenes, missing } = await measureScenes(plan, { outDir, ffprobe, tailSeconds });
@@ -91,7 +93,10 @@ export async function stitchFilm(plan, {
   if (!segments.length) throw new Error(`No scene videos found in ${outDir}. Generate the clips first.`);
 
   const musicFile = music ? await findFile(outDir, 'music') : null;
-  const joined = musicFile ? path.join(segDir, 'joined.mp4') : output;
+  const cues = subtitles === 'off' ? [] : buildCues(plan, scenes);
+  // Each finishing step writes a new file in segments/; the last one becomes the film.
+  const joined = path.join(segDir, 'joined.mp4');
+  let current = joined;
 
   const listFile = path.join(segDir, 'concat.txt');
   await writeFile(listFile, segments.map((s) => `file '${s.replace(/'/g, "'\\''")}'`).join('\n') + '\n');
@@ -104,12 +109,36 @@ export async function stitchFilm(plan, {
 
   if (musicFile) {
     log(`Mixing in ${path.basename(musicFile)} at ${Math.round(musicVolume * 100)}% volume`);
-    await mixMusic({ ffmpeg, ffprobe, film: joined, music: musicFile, output: path.join(segDir, 'with-music.mp4'), volume: musicVolume });
-    await rename(path.join(segDir, 'with-music.mp4'), output);
+    const next = path.join(segDir, 'with-music.mp4');
+    await mixMusic({ ffmpeg, ffprobe, film: current, music: musicFile, output: next, volume: musicVolume });
+    current = next;
   }
 
+  let srtFile = null;
+  if (cues.length) {
+    srtFile = output.replace(/\.[^.]+$/, '') + '.srt';
+    await writeFile(srtFile, toSrt(cues));
+    const next = path.join(segDir, 'with-subtitles.mp4');
+    if (subtitles === 'burn') {
+      log(`Burning ${cues.length} subtitles into the picture`);
+      await burnSubtitles({ ffmpeg, film: current, srt: srtFile, output: next });
+    } else {
+      log(`Adding ${cues.length} subtitles (viewers can turn them on or off)`);
+      await embedSubtitles({ ffmpeg, film: current, srt: srtFile, output: next });
+    }
+    current = next;
+  }
+
+  await rename(current, output);
   const duration = await probeDuration(ffprobe, output);
-  return { output, duration, scenes: segments.length, missing, music: musicFile ? path.basename(musicFile) : null };
+  return {
+    output,
+    duration,
+    scenes: segments.length,
+    missing,
+    music: musicFile ? path.basename(musicFile) : null,
+    subtitles: cues.length ? { mode: subtitles, file: srtFile, count: cues.length } : null,
+  };
 }
 
 /**
@@ -138,6 +167,40 @@ async function mixMusic({ ffmpeg, ffprobe, film, music, output, volume }) {
     '-movflags', '+faststart',
     output,
   ]);
+}
+
+/** A subtitle track players can switch on and off. Nothing is re-encoded. */
+async function embedSubtitles({ ffmpeg, film, srt, output }) {
+  await run(ffmpeg, [
+    '-y', '-loglevel', 'error',
+    '-i', film, '-i', srt,
+    '-map', '0:v', '-map', '0:a', '-map', '1:s',
+    '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'mov_text',
+    '-metadata:s:s:0', 'title=Narration',
+    '-disposition:s:0', 'default',
+    '-movflags', '+faststart',
+    output,
+  ]);
+}
+
+/** Subtitles drawn into the picture, so they show everywhere (social media, etc.). */
+async function burnSubtitles({ ffmpeg, film, srt, output }) {
+  // Sizes are relative to libass's default 288-pixel-high canvas, so they scale with the video.
+  const style = [
+    'FontName=Arial', 'FontSize=18', 'PrimaryColour=&H00FFFFFF', 'OutlineColour=&H00000000',
+    'BackColour=&H80000000', 'BorderStyle=1', 'Outline=1.6', 'Shadow=0.8', 'MarginV=22', 'Alignment=2',
+  ].join(',');
+  // Run inside the .srt's folder so the filter only sees a plain file name (no escaping trouble).
+  await run(ffmpeg, [
+    '-y', '-loglevel', 'error',
+    '-i', path.resolve(film),
+    '-vf', `subtitles=${path.basename(srt)}:force_style='${style}'`,
+    '-map', '0:v', '-map', '0:a',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p',
+    '-c:a', 'copy',
+    '-movflags', '+faststart',
+    path.resolve(output),
+  ], { cwd: path.dirname(srt) });
 }
 
 async function checkTool(cmd) {

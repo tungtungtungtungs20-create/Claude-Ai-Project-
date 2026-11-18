@@ -6,6 +6,7 @@ Duration: 5
 Voice: Bernard
 Music: gentle cinematic orchestral score, warm strings and soft choir, reverent and hopeful, slow build, ancient Middle Eastern instruments like oud and ney flute
 Music volume: 0.3
+Subtitles: soft
 
 <!--
 Optional: keep a character consistent across scenes with up to 3 reference images.

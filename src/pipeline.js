@@ -3,6 +3,7 @@ import path from 'node:path';
 import { TaskFailedError, TaskTimedOutError } from '@runwayml/sdk';
 import { DEFAULTS, matchingVideoRatio } from './config.js';
 import { slugify } from './story.js';
+import { SUBTITLE_MODES } from './subtitles.js';
 
 const DEFAULT_MOTION = 'Slow, gentle cinematic camera push-in; subtle natural movement in the scene.';
 
@@ -24,8 +25,12 @@ export function buildPlan(story, overrides = {}) {
   const duration = overrides.duration ?? story.duration ?? DEFAULTS.video.duration;
   const voice = overrides.voice ?? story.voice ?? DEFAULTS.speech.voice;
   const musicVolume = overrides.musicVolume ?? story.musicVolume ?? DEFAULTS.music.volume;
+  const subtitles = overrides.subtitles ?? story.subtitles ?? 'soft';
   const errors = [];
 
+  if (!SUBTITLE_MODES.includes(subtitles)) {
+    errors.push(`Subtitles must be one of ${SUBTITLE_MODES.join(', ')} (got "${subtitles}").`);
+  }
   if (!Number.isFinite(musicVolume) || musicVolume < 0 || musicVolume > 1) {
     errors.push(`Music volume must be between 0 and 1 (got "${musicVolume}").`);
   }
@@ -90,6 +95,7 @@ export function buildPlan(story, overrides = {}) {
     musicModel: DEFAULTS.music.model,
     music: story.music,
     musicVolume,
+    subtitles,
     ratio,
     videoRatio,
     duration,
@@ -112,6 +118,7 @@ export function describePlan(plan) {
   out.push(plan.music
     ? `Music: ${plan.musicModel}, instrumental, ${Math.round(plan.musicVolume * 100)}% volume: ${plan.music}`
     : 'Music: none (add a "Music:" line to the story header)');
+  out.push(`Subtitles: ${{ soft: 'on (viewers can turn them off) + .srt file', burn: 'burned into the picture + .srt file', off: 'off' }[plan.subtitles] ?? plan.subtitles}`);
   out.push(`Scenes: ${plan.scenes.length} (${plan.scenes.length} images + ${plan.scenes.length} videos + ${narrated} narration clips)`);
   for (const s of plan.scenes) {
     out.push('');

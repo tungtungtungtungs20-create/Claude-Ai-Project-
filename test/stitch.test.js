@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseStory } from '../src/story.js';
@@ -77,6 +77,51 @@ test('mixes looping, faded background music under the film without changing its 
   const silent = await stitchFilm(plan, { outDir, log: () => {}, music: false, output: path.join(outDir, 'no-music.mp4') });
   assert.equal(silent.music, null);
   assert.ok(meanVolume(silent.output, 3, 1) < -80, 'no music: the silent scene should be silent');
+});
+
+const subtitleStreams = (file) =>
+  execFileSync('ffprobe', ['-v', 'error', '-select_streams', 's', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', file]).toString().trim();
+// A small greyscale snapshot of the bottom of a frame, for comparing pictures.
+const bottomStrip = (file, at) =>
+  execFileSync('ffmpeg', ['-loglevel', 'error', '-ss', String(at), '-i', file, '-frames:v', '1', '-vf', 'crop=iw:ih/4:0:ih*3/4,scale=160:45,format=gray', '-f', 'rawvideo', '-']);
+
+async function narratedFixture() {
+  const outDir = await mkdtemp(path.join(tmpdir(), 'subs-'));
+  clip(path.join(outDir, 'scene-01-video.mp4'), 3);
+  tone(path.join(outDir, 'scene-01-narration.mp3'), 2);
+  clip(path.join(outDir, 'scene-02-video.mp4'), 2);
+  tone(path.join(outDir, 'scene-02-narration.mp3'), 1);
+  return outDir;
+}
+const SUB_STORY = '# Sub Film\n## A\nx\nNarration: In the beginning. There was light.\n## B\ny\nNarration: The end [sighs].';
+
+test('adds a switchable subtitle track and an .srt file', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {
+  const outDir = await narratedFixture();
+  const film = await stitchFilm(buildPlan(parseStory(SUB_STORY)), { outDir, log: () => {} });
+  assert.deepEqual(film.subtitles, { mode: 'soft', file: path.join(outDir, 'sub-film.srt'), count: 3 });
+  assert.equal(subtitleStreams(film.output), 'mov_text');
+  const srt = await readFile(film.subtitles.file, 'utf8');
+  assert.match(srt, /^1\n00:00:00,000 --> /);
+  // Scene 2 starts at 3s; its caption lasts as long as its ~1s narration (MP3s run a few ms long).
+  assert.match(srt, /00:00:03,000 --> 00:00:04,0\d\d\nThe end\.\n$/);
+  assert.doesNotMatch(srt, /sighs/);
+});
+
+test('burns subtitles into the picture', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {
+  const outDir = await narratedFixture();
+  const plan = buildPlan(parseStory(SUB_STORY));
+  const burned = await stitchFilm(plan, { outDir, log: () => {}, subtitles: 'burn', output: path.join(outDir, 'burned.mp4') });
+  const plain = await stitchFilm(plan, { outDir, log: () => {}, subtitles: 'off', output: path.join(outDir, 'plain.mp4') });
+  assert.equal(burned.subtitles.mode, 'burn');
+  assert.equal(subtitleStreams(burned.output), '', 'burned film has no separate track');
+  assert.equal(plain.subtitles, null);
+  assert.ok(Math.abs(burned.duration - plain.duration) < 0.1);
+
+  const differing = (a, b) => a.reduce((n, v, i) => n + (Math.abs(v - b[i]) > 40 ? 1 : 0), 0);
+  // During a caption the bottom of the picture changes; between captions (3.5s-ish is still
+  // a caption, so check 2.6s, after scene 1's narration has ended) it matches the plain film.
+  assert.ok(differing(bottomStrip(burned.output, 0.5), bottomStrip(plain.output, 0.5)) > 100, 'text visible during a caption');
+  assert.ok(differing(bottomStrip(burned.output, 2.6), bottomStrip(plain.output, 2.6)) < 50, 'no text between captions');
 });
 
 test('explains when there is nothing to stitch', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {

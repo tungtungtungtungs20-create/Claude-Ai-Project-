@@ -17,12 +17,13 @@ Exploring artificial intelligence, creative storytelling, animation, and innovat
 
 ## Story → Scenes (Runway Dev)
 
-Turns a story written in Markdown into a narrated film with background music. For each scene it makes a **still image**, a **short video clip** and a **narration** track with the [Runway Dev API](https://docs.dev.runwayml.com/), then composes a **music** track for the whole film and stitches everything into **one video**.
+Turns a story written in Markdown into a narrated film with background music. For each scene it makes a **still image**, a **short video clip** and a **narration** track with the [Runway Dev API](https://docs.dev.runwayml.com/), then composes a **music** track for the whole film and stitches everything into **one video with subtitles**.
 
 - Images: `gen4_image` (can use up to 3 reference images to keep characters consistent)
 - Clips: `gen4_turbo` (animates each scene's image, using it as the first frame)
 - Narration: `eleven_v4` with a preset voice. Each scene is read with its neighbouring lines as context, so the narration flows from scene to scene.
 - Music: `eleven_music_v2_5`, one instrumental track made to the film's exact length (you're billed per second requested)
+- Subtitles: made from the narration text, either as a track viewers can turn on and off or burned into the picture, plus an `.srt` file
 - Stitching: [ffmpeg](https://ffmpeg.org/download.html), which must be installed (`brew install ffmpeg`, `sudo apt install ffmpeg`, or `winget install ffmpeg`)
 
 ### Setup
@@ -47,6 +48,7 @@ Reference: noah = ../refs/noah.png   # optional, up to 3; use @noah in prompts
 Voice: Bernard             # optional narrator preset (default Bernard)
 Music: gentle orchestral strings, hopeful   # optional background music description
 Music volume: 0.3          # optional, 0 to 1 (default 0.3)
+Subtitles: soft            # optional: soft (default), burn, or off
 
 ## Scene title
 Free text describing the scene (used for the image if there's no Image: line).
@@ -66,15 +68,18 @@ npm run generate -- stories/noahs-ark.md --images-only   # cheaper first pass
 npm run stitch -- stories/noahs-ark.md     # free: rebuild the film from files already made
 ```
 
-Other options: `--voice <name>`, `--music-volume <0-1>`, `--skip-narration`, `--skip-music`, `--skip-stitch`. Run with `--help` for the full list.
+Other options: `--voice <name>`, `--music-volume <0-1>`, `--subtitles <soft|burn|off>`, `--skip-narration`, `--skip-music`, `--skip-stitch`. Run with `--help` for the full list.
 
 Output goes to `output/<story-title>/`:
 - `scene-01-image.png`, `scene-01-video.mp4`, `scene-01-narration.mp3`, and so on for each scene
 - `music.mp3` (if the story has a `Music:` line)
 - `manifest.json` with the prompts and Runway task IDs
 - **`<story-title>.mp4`, the finished film**
+- `<story-title>.srt`, the subtitles as a separate file (for YouTube, video editors, and so on)
 
 In the film, a scene lasts as long as its clip or its narration plus a short pause, whichever is longer. If the narration runs past the clip, the last frame is held so no words are cut off. Scenes without narration play silently. To shorten a held frame, write less narration or use a longer `Duration:`.
+
+**Subtitles** come from each scene's `Narration:` text; speech tags like `[laughs]` are left out. Captions are at most two lines and are timed across the scene's narration by length. Runway's speech output doesn't include word timings, so a caption can start a moment early or late, but it never spills into the next scene. Use `soft` for a track that players can turn on and off (YouTube and most players show it). Use `burn` for social media and anywhere else that ignores subtitle tracks; the text is drawn into the picture and can't be turned off. Changing the mode with `npm run stitch -- <story> --subtitles burn` is free.
 
 **Music** is made after all the scenes, because it's sized to the finished film's length. It's mixed in quietly with a fade-in and fade-out, and it dips automatically while the narrator speaks. If the film later gets longer, the track loops. To try a different track, delete `music.mp3` and run `generate` again; only the music is remade. To change just the volume, run `npm run stitch -- <story> --music-volume 0.2`, which is free.
 
