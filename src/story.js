@@ -7,6 +7,7 @@
 //   Voice: Bernard
 //   Music: gentle orchestral strings, hopeful, slow build
 //   Music volume: 0.3
+//   Subtitles: soft        (soft, burn or off)
 //
 //   ## The Storm Gathers
 //   Free text describing the scene (used for the image if there's no Image: line).
@@ -16,7 +17,7 @@
 //
 // Each "## " heading starts a new scene.
 
-const SETTING_RE = /^(style|ratio|reference|duration|seed|voice|music\s+volume|music)\s*:\s*(.*)$/i;
+const SETTING_RE = /^(style|ratio|reference|duration|seed|voice|music\s+volume|music|subtitles)\s*:\s*(.*)$/i;
 const SCENE_FIELD_RE = /^(image|motion|seed|narration)\s*:\s*(.*)$/i;
 
 export function parseStory(markdown) {
@@ -24,7 +25,7 @@ export function parseStory(markdown) {
     .replace(/\r\n?/g, '\n')
     .replace(/<!--[\s\S]*?-->/g, '')
     .split('\n');
-  const story = { title: '', style: '', ratio: null, duration: null, seed: null, voice: null, music: '', musicVolume: null, references: [], scenes: [] };
+  const story = { title: '', style: '', ratio: null, duration: null, seed: null, voice: null, music: '', musicVolume: null, subtitles: null, references: [], scenes: [] };
   let scene = null;
 
   const flush = () => {
@@ -60,6 +61,7 @@ export function parseStory(markdown) {
         case 'voice': story.voice = value.trim(); break;
         case 'music': story.music = value.trim(); break;
         case 'music volume': story.musicVolume = Number(value); break;
+        case 'subtitles': story.subtitles = value.trim().toLowerCase(); break;
         case 'reference': story.references.push(parseReference(value)); break;
       }
       continue;

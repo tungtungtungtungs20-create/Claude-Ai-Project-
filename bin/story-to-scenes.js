@@ -26,6 +26,7 @@ Options:
   --duration <s>   Clip length in seconds (default 5)
   --voice <name>   Narrator preset voice (default Bernard)
   --music-volume <0-1>  Background music level under the narration (default 0.3)
+  --subtitles <mode>    soft (switchable track, default), burn (drawn into the picture) or off
   -h, --help       Show this help
 
 Needs RUNWAYML_API_SECRET set to a Runway Dev project API key.
@@ -42,6 +43,7 @@ async function main() {
       'skip-stitch': { type: 'boolean' },
       'skip-music': { type: 'boolean' },
       'music-volume': { type: 'string' },
+      subtitles: { type: 'string' },
       'stitch-only': { type: 'boolean' },
       voice: { type: 'string' },
       force: { type: 'boolean' },
@@ -62,6 +64,7 @@ async function main() {
   const plan = buildPlan(story, {
     ratio: values.ratio,
     voice: values.voice,
+    subtitles: values.subtitles?.toLowerCase(),
     musicVolume: values['music-volume'] !== undefined ? Number(values['music-volume']) : undefined,
     duration: values.duration !== undefined ? Number(values.duration) : undefined,
   });
@@ -85,7 +88,9 @@ async function main() {
   const stitch = async () => {
     console.log(`\nStitching film...`);
     const film = await stitchFilm(plan, { outDir, music: !values['skip-music'] });
-    console.log(`Film: ${film.output} (${film.duration.toFixed(1)}s, ${film.scenes} scenes${film.music ? ', with music' : ''})`);
+    const extras = [film.music && 'music', film.subtitles && `${film.subtitles.count} subtitles`].filter(Boolean);
+    console.log(`Film: ${film.output} (${film.duration.toFixed(1)}s, ${film.scenes} scenes${extras.length ? `, with ${extras.join(' and ')}` : ''})`);
+    if (film.subtitles) console.log(`Subtitles file: ${film.subtitles.file}`);
   };
 
   if (values['stitch-only']) {
