@@ -19,6 +19,8 @@ Options:
   --skip-narration Don't generate narration (the film is silent where none exists)
   --skip-music     Don't generate or mix in background music
   --skip-stitch    Generate scenes but don't build the final film
+  --skip-title-card     Leave out the opening title card
+  --skip-credits        Leave out the end credits
   --stitch-only    Only build the final film from files already generated (free)
   --force          Regenerate scenes that already have files
   --out <dir>      Output folder (default: output/<story-title>)
@@ -41,6 +43,8 @@ async function main() {
       'images-only': { type: 'boolean' },
       'skip-narration': { type: 'boolean' },
       'skip-stitch': { type: 'boolean' },
+      'skip-title-card': { type: 'boolean' },
+      'skip-credits': { type: 'boolean' },
       'skip-music': { type: 'boolean' },
       'music-volume': { type: 'string' },
       subtitles: { type: 'string' },
@@ -64,6 +68,8 @@ async function main() {
   const plan = buildPlan(story, {
     ratio: values.ratio,
     voice: values.voice,
+    titleCard: values['skip-title-card'] ? false : undefined,
+    endCredits: values['skip-credits'] ? false : undefined,
     subtitles: values.subtitles?.toLowerCase(),
     musicVolume: values['music-volume'] !== undefined ? Number(values['music-volume']) : undefined,
     duration: values.duration !== undefined ? Number(values.duration) : undefined,

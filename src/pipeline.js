@@ -96,6 +96,11 @@ export function buildPlan(story, overrides = {}) {
     music: story.music,
     musicVolume,
     subtitles,
+    author: story.author ?? '',
+    tagline: story.tagline ?? '',
+    credits: story.credits ?? [],
+    titleCard: overrides.titleCard ?? story.titleCard ?? true,
+    endCredits: overrides.endCredits ?? story.endCredits ?? true,
     ratio,
     videoRatio,
     duration,
@@ -118,6 +123,7 @@ export function describePlan(plan) {
   out.push(plan.music
     ? `Music: ${plan.musicModel}, instrumental, ${Math.round(plan.musicVolume * 100)}% volume: ${plan.music}`
     : 'Music: none (add a "Music:" line to the story header)');
+  out.push(`Title card: ${plan.titleCard ? 'on' : 'off'}   End credits: ${plan.endCredits ? 'on' : 'off'}`);
   out.push(`Subtitles: ${{ soft: 'on (viewers can turn them off) + .srt file', burn: 'burned into the picture + .srt file', off: 'off' }[plan.subtitles] ?? plan.subtitles}`);
   out.push(`Scenes: ${plan.scenes.length} (${plan.scenes.length} images + ${plan.scenes.length} videos + ${narrated} narration clips)`);
   for (const s of plan.scenes) {

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { parseStory } from '../src/story.js';
 import { buildPlan } from '../src/pipeline.js';
 import { measureScenes, probeDuration, stitchFilm } from '../src/stitch.js';
+import { cardDurations } from '../src/cards.js';
 
 let hasFfmpeg = true;
 try {
@@ -34,7 +35,7 @@ test('stitches clips, holds the last frame for long narration, and adds silence 
   clip(path.join(outDir, 'scene-03-video.mp4'), 2, '200x200');
   tone(path.join(outDir, 'scene-03-narration.mp3'), 1);
 
-  const plan = buildPlan(parseStory('# Little Film\n## A\nx\n## B\ny\n## C\nz\n## D\nnot generated yet'), { ratio: '1280:720' });
+  const plan = buildPlan(parseStory('# Little Film\nTitle card: off\nEnd credits: off\n## A\nx\n## B\ny\n## C\nz\n## D\nnot generated yet'), { ratio: '1280:720' });
   const logs = [];
   const film = await stitchFilm(plan, { outDir, log: (m) => logs.push(m) });
 
@@ -62,7 +63,7 @@ test('mixes looping, faded background music under the film without changing its 
   // A 2s "music" track, shorter than the film, so it has to loop.
   ff('-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', path.join(outDir, 'music.mp3'));
 
-  const plan = buildPlan(parseStory('# Music Film\nMusic: test\n## A\nx\n## B\ny'));
+  const plan = buildPlan(parseStory('# Music Film\nTitle card: off\nEnd credits: off\nMusic: test\n## A\nx\n## B\ny'));
   const measured = await measureScenes(plan, { outDir });
   assert.ok(Math.abs(measured.totalSeconds - 5) < 0.2, `expected about 5s, got ${measured.totalSeconds}`);
 
@@ -93,7 +94,8 @@ async function narratedFixture() {
   tone(path.join(outDir, 'scene-02-narration.mp3'), 1);
   return outDir;
 }
-const SUB_STORY = '# Sub Film\n## A\nx\nNarration: In the beginning. There was light.\n## B\ny\nNarration: The end [sighs].';
+const NO_CARDS = 'Title card: off\nEnd credits: off\n';
+const SUB_STORY = '# Sub Film\n' + NO_CARDS + '## A\nx\nNarration: In the beginning. There was light.\n## B\ny\nNarration: The end [sighs].';
 
 test('adds a switchable subtitle track and an .srt file', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {
   const outDir = await narratedFixture();
@@ -122,6 +124,50 @@ test('burns subtitles into the picture', { skip: !hasFfmpeg && 'ffmpeg not insta
   // a caption, so check 2.6s, after scene 1's narration has ended) it matches the plain film.
   assert.ok(differing(bottomStrip(burned.output, 0.5), bottomStrip(plain.output, 0.5)) > 100, 'text visible during a caption');
   assert.ok(differing(bottomStrip(burned.output, 2.6), bottomStrip(plain.output, 2.6)) < 50, 'no text between captions');
+});
+
+test('adds a title card and end credits, and shifts subtitles and music to fit', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {
+  const outDir = await narratedFixture();
+  // A still for the title card background.
+  ff('-f', 'lavfi', '-i', 'color=c=0x303848:s=640x360', '-frames:v', '1', path.join(outDir, 'scene-01-image.png'));
+  ff('-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', path.join(outDir, 'music.mp3'));
+  const story = "# The Ark: A Promise\nAuthor: Sam O'Neil\nTagline: 100% true, \"they\" say\nCredit: Produced by Sam\nMusic: strings\n" +
+    '## A\nx\nNarration: In the beginning. There was light.\n## B\ny\nNarration: The end.';
+  const plan = buildPlan(parseStory(story));
+  const { cards, totalSeconds } = await measureScenes(plan, { outDir });
+  assert.equal(cards.title, 4.5);
+  assert.ok(cards.credits >= 6);
+
+  const film = await stitchFilm(plan, { outDir, log: () => {} });
+  const scenesOnly = 5; // 3s + 2s clips (narration is shorter than both)
+  assert.ok(Math.abs(film.duration - (cards.title + scenesOnly + cards.credits)) < 0.4, `got ${film.duration}`);
+  assert.ok(Math.abs(totalSeconds - film.duration) < 0.4, 'music is sized to the whole film');
+  assert.equal(film.scenes, 2);
+  assert.equal(film.music, 'music.mp3');
+
+  // The first caption starts after the title card.
+  const srt = await readFile(film.subtitles.file, 'utf8');
+  assert.match(srt, /^1\n00:00:04,500 --> /);
+
+  // The title card shows text over the blurred still; the credits are text on black.
+  const frame = (at) => execFileSync('ffmpeg', ['-loglevel', 'error', '-ss', String(at), '-i', film.output, '-frames:v', '1', '-vf', 'scale=640:360,format=gray', '-f', 'rawvideo', '-']);
+  const brightPixels = (buf) => buf.reduce((n, v) => n + (v > 200 ? 1 : 0), 0);
+  const darkPixels = (buf) => buf.reduce((n, v) => n + (v < 30 ? 1 : 0), 0);
+  const titleFrame = frame(2.2);
+  assert.ok(brightPixels(titleFrame) > 300, 'title text is visible');
+  const creditsFrame = frame(film.duration - cards.credits / 2);
+  assert.ok(brightPixels(creditsFrame) > 300, 'credit text is visible');
+  assert.ok(darkPixels(creditsFrame) > 640 * 360 * 0.7, 'credits are on black');
+  // The film starts from black (fade in).
+  assert.ok(brightPixels(frame(0)) === 0);
+});
+
+test('cards can be turned off', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {
+  const outDir = await narratedFixture();
+  const plan = buildPlan(parseStory(SUB_STORY.replace(NO_CARDS, 'Title card: off\n')));
+  const { cards } = await measureScenes(plan, { outDir });
+  assert.deepEqual(cards, { title: 0, credits: cardDurations(plan).credits });
+  assert.ok(cards.credits > 0);
 });
 
 test('explains when there is nothing to stitch', { skip: !hasFfmpeg && 'ffmpeg not installed' }, async () => {

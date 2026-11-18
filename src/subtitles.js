@@ -52,11 +52,12 @@ function wrapLines(caption, maxLine = MAX_LINE) {
 /**
  * Timed captions for the whole film.
  * `measured` is the list from measureScenes(); `plan` supplies the narration text.
+ * `startOffset` is when the first scene starts (after any title card).
  */
-export function buildCues(plan, measured) {
+export function buildCues(plan, measured, startOffset = 0) {
   const textById = new Map(plan.scenes.map((s) => [s.id, s.narration || '']));
   const cues = [];
-  let sceneStart = 0;
+  let sceneStart = startOffset; // e.g. the title card's length
   for (const scene of measured) {
     const text = textById.get(scene.id);
     if (scene.audio && text) {

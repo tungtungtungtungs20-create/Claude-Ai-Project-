@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { DEFAULTS } from './config.js';
 import { findFile } from './pipeline.js';
 import { buildCues, toSrt } from './subtitles.js';
+import { cardDurations, renderCredits, renderTitleCard } from './cards.js';
 
 const run = promisify(execFile);
 
@@ -38,8 +39,10 @@ export async function measureScenes(plan, {
     const seconds = Math.max(videoSeconds, audio ? audioSeconds + tailSeconds : 0);
     scenes.push({ id: scene.id, video, audio, videoSeconds, audioSeconds, seconds });
   }
-  const totalSeconds = scenes.reduce((sum, s) => sum + s.seconds, 0);
-  return { scenes, missing, totalSeconds };
+  const cards = cardDurations(plan);
+  // Whole film, including the title card and end credits (used to size the music).
+  const totalSeconds = cards.title + scenes.reduce((sum, s) => sum + s.seconds, 0) + cards.credits;
+  return { scenes, missing, totalSeconds, cards };
 }
 
 export async function stitchFilm(plan, {
@@ -55,7 +58,7 @@ export async function stitchFilm(plan, {
   subtitles = plan.subtitles ?? 'soft',
 }) {
   await checkTool(ffmpeg);
-  const { scenes, missing } = await measureScenes(plan, { outDir, ffprobe, tailSeconds });
+  const { scenes, missing, cards } = await measureScenes(plan, { outDir, ffprobe, tailSeconds });
 
   const [width, height] = plan.videoRatio.split(':').map((n) => Math.round(Number(n) / 2) * 2);
   const segDir = path.join(outDir, 'segments');
@@ -92,8 +95,19 @@ export async function stitchFilm(plan, {
   if (missing.length) log(`Skipping scenes with no video yet: ${missing.join(', ')}`);
   if (!segments.length) throw new Error(`No scene videos found in ${outDir}. Generate the clips first.`);
 
+  const cardOptions = { ffmpeg, segDir, width, height, fps };
+  if (cards.title) {
+    log(`title card: ${cards.title.toFixed(1)}s`);
+    const backgroundImage = await findFile(outDir, `${plan.scenes[0].id}-image`);
+    segments.unshift(await renderTitleCard(plan, { ...cardOptions, seconds: cards.title, backgroundImage }));
+  }
+  if (cards.credits) {
+    log(`end credits: ${cards.credits.toFixed(1)}s`);
+    segments.push(await renderCredits(plan, { ...cardOptions, seconds: cards.credits }));
+  }
+
   const musicFile = music ? await findFile(outDir, 'music') : null;
-  const cues = subtitles === 'off' ? [] : buildCues(plan, scenes);
+  const cues = subtitles === 'off' ? [] : buildCues(plan, scenes, cards.title);
   // Each finishing step writes a new file in segments/; the last one becomes the film.
   const joined = path.join(segDir, 'joined.mp4');
   let current = joined;
@@ -134,7 +148,7 @@ export async function stitchFilm(plan, {
   return {
     output,
     duration,
-    scenes: segments.length,
+    scenes: scenes.length,
     missing,
     music: musicFile ? path.basename(musicFile) : null,
     subtitles: cues.length ? { mode: subtitles, file: srtFile, count: cues.length } : null,

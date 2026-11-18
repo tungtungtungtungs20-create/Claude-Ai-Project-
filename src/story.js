@@ -8,6 +8,11 @@
 //   Music: gentle orchestral strings, hopeful, slow build
 //   Music volume: 0.3
 //   Subtitles: soft        (soft, burn or off)
+//   Author: Jane Doe
+//   Tagline: A story of faith and a promise
+//   Credit: Produced by Jane Doe     (repeat for more lines)
+//   Title card: on         (on or off)
+//   End credits: on        (on or off)
 //
 //   ## The Storm Gathers
 //   Free text describing the scene (used for the image if there's no Image: line).
@@ -17,7 +22,7 @@
 //
 // Each "## " heading starts a new scene.
 
-const SETTING_RE = /^(style|ratio|reference|duration|seed|voice|music\s+volume|music|subtitles)\s*:\s*(.*)$/i;
+const SETTING_RE = /^(style|ratio|reference|duration|seed|voice|music\s+volume|music|subtitles|author|tagline|credit|title\s+card|end\s+credits)\s*:\s*(.*)$/i;
 const SCENE_FIELD_RE = /^(image|motion|seed|narration)\s*:\s*(.*)$/i;
 
 export function parseStory(markdown) {
@@ -25,7 +30,7 @@ export function parseStory(markdown) {
     .replace(/\r\n?/g, '\n')
     .replace(/<!--[\s\S]*?-->/g, '')
     .split('\n');
-  const story = { title: '', style: '', ratio: null, duration: null, seed: null, voice: null, music: '', musicVolume: null, subtitles: null, references: [], scenes: [] };
+  const story = { title: '', style: '', ratio: null, duration: null, seed: null, voice: null, music: '', musicVolume: null, subtitles: null, author: '', tagline: '', credits: [], titleCard: null, endCredits: null, references: [], scenes: [] };
   let scene = null;
 
   const flush = () => {
@@ -62,6 +67,11 @@ export function parseStory(markdown) {
         case 'music': story.music = value.trim(); break;
         case 'music volume': story.musicVolume = Number(value); break;
         case 'subtitles': story.subtitles = value.trim().toLowerCase(); break;
+        case 'author': story.author = value.trim(); break;
+        case 'tagline': story.tagline = value.trim(); break;
+        case 'credit': story.credits.push(value.trim()); break;
+        case 'title card': story.titleCard = onOff(value, 'Title card'); break;
+        case 'end credits': story.endCredits = onOff(value, 'End credits'); break;
         case 'reference': story.references.push(parseReference(value)); break;
       }
       continue;
@@ -83,6 +93,13 @@ export function parseStory(markdown) {
 
   if (!story.title) story.title = 'Untitled Story';
   return story;
+}
+
+function onOff(value, name) {
+  const v = value.trim().toLowerCase();
+  if (['on', 'yes', 'true'].includes(v)) return true;
+  if (['off', 'no', 'false'].includes(v)) return false;
+  throw new Error(`"${name}:" should be on or off (got "${value.trim()}").`);
 }
 
 function parseReference(value) {

@@ -47,6 +47,15 @@ export const DEFAULTS = {
     // Extra seconds requested beyond the film's length, as a safety margin.
     paddingSeconds: 2,
   },
+  cards: {
+    titleSeconds: 4.5,
+    creditsMinSeconds: 6,
+    creditsMaxSeconds: 15,
+    fadeSeconds: 0.8,
+    // Font families looked up by fontconfig; any installed font name works.
+    titleFont: 'Serif',
+    textFont: 'Sans',
+  },
   // Final film: silence kept after each scene's narration before the cut (seconds).
   narrationTailSeconds: 0.6,
   fps: 24,
